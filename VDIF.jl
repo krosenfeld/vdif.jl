@@ -1,6 +1,7 @@
 module VDIF
 
 function readwords!(s::IO, w::AbstractArray{Uint32}, nw=length(w))
+  # 1 word == 4 Bytes
   olw = lw = length(w)
   nr = 0
   while nr < nw && !eof(s)
@@ -18,9 +19,10 @@ function readwords!(s::IO, w::AbstractArray{Uint32}, nw=length(w))
   return nr
 end
 
-function readwords(s::IO, nw=typemax(Int))
+function readwords(s::IO, nw=typemax(Uint32))
   # read up to nw words from s, return a vector{Uint32} of words read.
-  w = Array(Uint32, nw == typemax(Int) ? 1024 : nw)
+  #w = Array(Uint32, nw == typemax(Int) ? 1024 : nw)
+  w = Array(Uint32, nw)
   nr = readwords!(s, w, nw)
   resize!(w, nr)
 end
@@ -30,18 +32,18 @@ type VDIFFrameHeader
   sampleRate
 
   # word 0
-  invalidData
-  legacyMode
-  secsSinceEpoch
+  invalidData::Bool
+  legacyMode::Bool
+  secsSinceEpoch::Uint32
 
   # word 1
-  refEpoch
-  dataFrame
+  refEpoch::Uint8
+  dataFrame::Uint32
 
   # word 2
-  vdifVers
-  log2Chans
-  frameLength
+  vdifVers::Uint8
+  log2Chans::Uint8
+  frameLength   # in units of 8 Bytes
 
   # word 3
   isComplex
@@ -75,7 +77,7 @@ VDIFFrameHeader() = VDIFFrameHeader(
 
 type VDIFFrame
   header::VDIFFrameHeader
-  data
+  data::AbstractArray
 end
 
 # constructor
@@ -118,7 +120,7 @@ function from_bin(inst::VDIFFrameHeader,words::AbstractArray{Uint32})
     # words 4-7
     inst.eudVers = int((words[5] >> 24) & 0xff)
     inst.eud[1] = words[5] & 0xffffff
-    inst.eud[2:end] = words[6:end]
+    inst.eud[2:end] = words[6:8]
   end
 
   return inst
@@ -155,25 +157,29 @@ function datetime(inst::VDIFFrameHeader)
 end
 
 function from_bin(inst::VDIFFrame,words::AbstractArray{Uint32})
+
+  # construct header
+  from_bin(inst.header,words)
+
   # find out where the data start and end in binary frame
-  dataStart = int.header.legacyMode ? 16 : 32
+  dataStart = inst.header.legacyMode ? 16 : 32 # in bytes
   dataStop  = inst.header.frameLength * 8
   dataSize  = dataStop - dataStart # in bytes
-  dataWords = dataSize / 4
-  headerWords = dataStart / 4
+  dataWords = dataSize / 4    # in words
+  headerWords = dataStart / 4 # in words
 
   # create empy data buffer
   sampPerWord = 32 / inst.header.bitsPerSample
-  inst.data = zeros(Uint32, sampPerWord * dataWords)
+  inst.data = zeros(Int32, int(sampPerWord * dataWords))
 
   # interpret the data given our bits-per-sample
-  sampMax = 2^inst.header.bitsPerSample - 1
+  sampMax = int(2^inst.header.bitsPerSample - 1)
   for wordN = 1:dataWords
     for sampN = 1:sampPerWord
-      shiftBy = inst.header.bitsPerSample * (sampN - 1)
-      foo = (words[headerWords + wordN] >> shift_by) & sampMax
+      shiftBy = int(inst.header.bitsPerSample * (sampN - 1))
+      foo = (words[headerWords + wordN] >> shiftBy) & sampMax
       # interpret as offset binary
-      inst.data[sampN + (wordN-1) * sampPerWord] =  foo - 2^(inst.bitsPerSample - 1)
+      inst.data[sampN + (wordN-1) * sampPerWord] =  foo - 2^(inst.header.bitsPerSample - 1)
     end
   end
 
