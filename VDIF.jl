@@ -1,5 +1,30 @@
 module VDIF
 
+function readwords!(s::IO, w::AbstractArray{Uint32}, nw=length(w))
+  olw = lw = length(w)
+  nr = 0
+  while nr < nw && !eof(s)
+    a = read(s, Uint32)
+    nr += 1
+    if nr > lw
+      lw = nr * 2
+      resize!(w, lw)
+    end
+    w[nr] = a
+  end
+  if lw > olw
+   resize!(w, nr) # shrink to just contain input data if was resized
+  end
+  return nr
+end
+
+function readwords(s::IO, nw=typemax(Int))
+  # read up to nw words from s, return a vector{Uint32} of words read.
+  w = Array(Uint32, nw == typemax(Int) ? 1024 : nw)
+  nr = readwords!(s, w, nw)
+  resize!(w, nr)
+end
+
 type VDIFFrameHeader
 
   sampleRate
@@ -30,6 +55,7 @@ type VDIFFrameHeader
 
 end
 
+# outer constructor for header
 VDIFFrameHeader() = VDIFFrameHeader(
   4096e6,
   false,
@@ -47,18 +73,26 @@ VDIFFrameHeader() = VDIFFrameHeader(
   0,
   [0,0,0,0])
 
-function from_bin(inst::VDIFFrameHeader,pkt)
+type VDIFFrame
+  header::VDIFFrameHeader
+  data
+end
+
+# constructor
+VDIFFrame() = VDIFFrame(VDIFFrameHeader(),[])
+
+function from_bin(inst::VDIFFrameHeader,words::AbstractArray{Uint32})
   # Convert byte array pkt to VDIF Frame header type
 
   # construct 4 byte words
-  words = zeros(Uint32,4)
-  for i=1:4  
-    word = 0
-    for j=1:4
-      word += uint32( pkt[j + 4*(i-1)] ) <<  (8*(j-1))
-    end
-    words[i] = word
-  end
+  #words = zeros(Uint32,4)
+  #for i=1:4  
+  #  word = 0
+  #  for j=1:4
+  #    word += uint32( pkt[j + 4*(i-1)] ) <<  (8*(j-1))
+  #  end
+  #  words[i] = word
+  #end
 
   # word 0
   inst.invalidData = bool((words[1] >> 31) & 0x1)
@@ -81,20 +115,10 @@ function from_bin(inst::VDIFFrameHeader,pkt)
   inst.stationId = int(words[4] & 0xffff)
 
   if ~inst.legacyMode
-    # parse extended user data
-    words = zeros(Uint32,4)
-    for i=1:4  
-      word = 0
-      for j=1:4
-        word += uint32( pkt[j + 16] ) <<  (8*(j-1))
-      end
-      words[i] = word
-    end
-
     # words 4-7
-    inst.eudVers = int((words[1] >> 24) & 0xff)
-    inst.eud[1] = words[1] & 0xffffff
-    inst.eud[2:end] = words[2:end]
+    inst.eudVers = int((words[5] >> 24) & 0xff)
+    inst.eud[1] = words[5] & 0xffffff
+    inst.eud[2:end] = words[6:end]
   end
 
   return inst
@@ -119,6 +143,41 @@ function datetime(inst::VDIFFrameHeader)
            1)
 
   # get seconds from start of day
+  secs = inst.secsSinceEpoch
+
+  # get the microseconds from the second
+  #off = end ? usecs_per_frame : 0.
+  #usecs = usecsPerFrame * dataFrame + off
+  println("datetime does not deal with end of VDIF properly")
+  usecs = usecsPerFrame
+
+  return date + secs + usecs
+end
+
+function from_bin(inst::VDIFFrame,words::AbstractArray{Uint32})
+  # find out where the data start and end in binary frame
+  dataStart = int.header.legacyMode ? 16 : 32
+  dataStop  = inst.header.frameLength * 8
+  dataSize  = dataStop - dataStart # in bytes
+  dataWords = dataSize / 4
+  headerWords = dataStart / 4
+
+  # create empy data buffer
+  sampPerWord = 32 / inst.header.bitsPerSample
+  inst.data = zeros(Uint32, sampPerWord * dataWords)
+
+  # interpret the data given our bits-per-sample
+  sampMax = 2^inst.header.bitsPerSample - 1
+  for wordN = 1:dataWords
+    for sampN = 1:sampPerWord
+      shiftBy = inst.header.bitsPerSample * (sampN - 1)
+      foo = (words[headerWords + wordN] >> shift_by) & sampMax
+      # interpret as offset binary
+      inst.data[sampN + (wordN-1) * sampPerWord] =  foo - 2^(inst.bitsPerSample - 1)
+    end
+  end
+
+  return inst
 end
 
 function check(file_::IOStream)
