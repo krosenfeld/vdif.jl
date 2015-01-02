@@ -54,7 +54,7 @@ type VDIFFrameHeader
 
   # words 4-7
   eudVers::Uint32
-  eud::AbstractArray{Uint32,1}
+  eud::Array{Uint32,1}
 
 end
 
@@ -78,7 +78,7 @@ VDIFFrameHeader() = VDIFFrameHeader(
 
 type VDIFFrame
   header::VDIFFrameHeader
-  data::AbstractArray
+  data::Array{Int32,1}
 end
 
 # constructor
@@ -118,7 +118,7 @@ function from_bin!(inst::VDIFFrameHeader,words::AbstractArray{Uint32})
 end
 
 
-function from_bin!(inst::VDIFFrame,words::AbstractArray{Uint32})
+function from_bin!(inst::VDIFFrame,words::Array{Uint32,1})
   # Convert word array to VDIF frame (header + data)
 
   # construct header
@@ -130,21 +130,22 @@ function from_bin!(inst::VDIFFrame,words::AbstractArray{Uint32})
   dataStart = inst.header.legacyMode ? 16 : 32 # in bytes
   dataStop  = inst.header.frameLength * 8
   dataSize  = dataStop - dataStart # in bytes
-  dataWords = dataSize / 4    # in words
-  headerWords = dataStart / 4 # in words
+  dataWords = uint(dataSize / 4)    # in words
+  headerWords = uint(dataStart / 4) # in words
 
   # create empy data buffer
-  sampPerWord = 32 / inst.header.bitsPerSample
+  sampPerWord = uint(32 / inst.header.bitsPerSample)
   inst.data = zeros(Int32, int(sampPerWord * dataWords))
 
   # interpret the data given our bits-per-sample
-  sampMax = int(2^inst.header.bitsPerSample - 1)
-  for wordN = 1:dataWords
-    for sampN = 1:sampPerWord
-      shiftBy = int(inst.header.bitsPerSample * (sampN - 1))
-      foo = (words[headerWords + wordN] >> shiftBy) & sampMax
+  sampMax = uint(2^inst.header.bitsPerSample - 1)
+  for wordN = 0x1:dataWords
+    foo = words[headerWords + wordN]
+    for sampN = 0x1:sampPerWord
+      shiftBy = inst.header.bitsPerSample * (sampN - 0x1)
+      boo = (foo >> shiftBy) & sampMax
       # interpret as offset binary
-      inst.data[sampN + (wordN-1) * sampPerWord] =  foo - 2^(inst.header.bitsPerSample - 1)
+      inst.data[sampN + (wordN-0x1) * sampPerWord] =  boo - 0x2^(inst.header.bitsPerSample - 0x1)
     end
   end
 
